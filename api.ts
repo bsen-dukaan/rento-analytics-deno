@@ -621,6 +621,10 @@ function processAgentData(rawData: any) {
   });
 }
 
+app.get("/", async (c) => {
+  return c.json({ msg: "Rento analytics server is live" });
+});
+
 app.post("/:bot9ID/csat/rentomojo", async (c) => {
   try {
     const { bot9ID } = c.req.param();
