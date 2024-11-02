@@ -1,8 +1,19 @@
 import { Hono } from "https://deno.land/x/hono@v4.3.11/mod.ts";
+import { cors } from "https://deno.land/x/hono@v4.3.11/middleware.ts";
 import * as postgres from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 import { stringify as csvStringify } from "https://deno.land/std@0.177.0/encoding/csv.ts";
 
 const app = new Hono();
+
+app.use(
+  "/*",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+  })
+);
 
 const POSTMARK_TOKEN = "66fafdf6-510f-4993-b2c2-f684c344bf39";
 const POSTGRES_URL =
