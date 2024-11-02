@@ -418,7 +418,9 @@ function processAgentData(rawData: any) {
       review.entityId,
       {
         value: review.value,
-        createdAt: new Date(review.createdAt).getTime(),
+        createdAt: review.createdAt
+          ? new Date(review.createdAt).getTime()
+          : null,
       },
     ])
   );
@@ -446,16 +448,23 @@ function processAgentData(rawData: any) {
     const channel = convo.Source || "N/A";
     const convoMessages = messagesByConversation.get(convo.id) || [];
 
-    convoMessages.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    // Sort messages by timestamp
+    convoMessages.sort((a, b) => {
+      const timeA = new Date(a.createdAt).getTime();
+      const timeB = new Date(b.createdAt).getTime();
+      return timeA - timeB;
+    });
 
     let segments = [];
     let currentSegment = null;
     let currentHandler = null;
     let queueStartTime = null;
-    let agentJoinTime = null;
     let lastUserMessageTime = null;
+    let currentAgentName = null;
 
     for (const message of convoMessages) {
+      if (!message.createdAt) continue;
+
       const chatUser = message.chatUser;
       const createdAt = new Date(message.createdAt);
 
@@ -465,19 +474,48 @@ function processAgentData(rawData: any) {
           if (chatText.message === "An Agent will be Assigned Soon") {
             queueStartTime = createdAt;
           } else if (chatText.message?.includes("has joined the chat")) {
-            agentJoinTime = createdAt;
+            // Extract agent name from the message
+            const agentName = chatText.message.replace(
+              " has joined the chat",
+              ""
+            );
+
+            // Close previous segment if exists
             if (currentSegment) {
-              currentSegment.agentJoinTime = createdAt;
+              currentSegment.endTime = createdAt;
+              segments.push(currentSegment);
             }
-            if (queueStartTime) {
-              const queueTimeMs =
-                agentJoinTime.getTime() - queueStartTime.getTime();
-              if (currentSegment) {
-                currentSegment.queueTime = queueTimeMs;
-              }
+
+            // Start new segment for the new agent
+            currentHandler = "Agent";
+            currentAgentName = agentName;
+            currentSegment = {
+              handler: "Agent",
+              agentName: agentName,
+              startTime: createdAt,
+              endTime: null,
+              userMessages: 0,
+              handlerMessages: 0,
+              firstResponseTime: null,
+              agentJoinTime: createdAt,
+              totalResponseTime: 0,
+              responseCount: 0,
+              queueTime: queueStartTime
+                ? createdAt.getTime() - queueStartTime.getTime()
+                : 0,
+            };
+            queueStartTime = null;
+          } else if (chatText.conversationTransfer === "closed") {
+            if (currentSegment) {
+              currentSegment.endTime = createdAt;
+              segments.push(currentSegment);
+              currentSegment = null;
+              currentHandler = null;
+              currentAgentName = null;
             }
           }
         } catch (e) {}
+        continue;
       }
 
       let handlerType = currentHandler;
@@ -486,7 +524,6 @@ function processAgentData(rawData: any) {
         handlerType = "Bot";
       } else if (chatUser === "humanagent") {
         handlerType = "Agent";
-        // Calculate first response time if agent hasn't sent a message yet
         if (
           currentSegment &&
           currentSegment.agentJoinTime &&
@@ -496,47 +533,28 @@ function processAgentData(rawData: any) {
             (createdAt.getTime() - currentSegment.agentJoinTime.getTime()) /
             1000;
         }
-      } else if (chatUser === "system") {
-        let chatText = {};
-        try {
-          chatText = message.chatText ? JSON.parse(message.chatText) : {};
-        } catch (e) {}
-
-        if (chatText.conversationTransfer === "needs_review") {
-          handlerType = "Agent";
-        } else if (chatText.conversationTransfer === "closed") {
-          if (currentSegment) {
-            currentSegment.endTime = createdAt;
-            segments.push(currentSegment);
-            currentSegment = null;
-            currentHandler = null;
-          }
-          continue;
-        }
       } else if (chatUser === "user") {
         handlerType = currentHandler || "Bot";
         lastUserMessageTime = createdAt;
       }
 
-      if (handlerType !== currentHandler) {
+      if (!currentSegment || (handlerType === "Agent" && !currentAgentName)) {
         if (currentSegment) {
           currentSegment.endTime = createdAt;
           segments.push(currentSegment);
         }
         currentSegment = {
           handler: handlerType,
+          agentName: currentAgentName,
           startTime: createdAt,
           endTime: null,
           userMessages: 0,
           handlerMessages: 0,
           firstResponseTime: null,
-          agentJoinTime: agentJoinTime, // Track when agent joined
+          agentJoinTime: null,
           totalResponseTime: 0,
           responseCount: 0,
-          queueTime:
-            queueStartTime && agentJoinTime
-              ? agentJoinTime.getTime() - queueStartTime.getTime()
-              : 0,
+          queueTime: 0,
         };
         currentHandler = handlerType;
       }
@@ -557,42 +575,39 @@ function processAgentData(rawData: any) {
       }
     }
 
-    if (currentSegment) {
+    if (currentSegment && convoMessages.length > 0) {
       currentSegment.endTime =
-        currentSegment.endTime || currentSegment.startTime;
+        currentSegment.endTime ||
+        new Date(convoMessages[convoMessages.length - 1].createdAt);
       segments.push(currentSegment);
     }
 
+    // Filter out invalid segments
     segments = segments.filter((segment) => {
+      if (!segment.startTime || !segment.endTime) return false;
       if (segment.startTime.getTime() === segment.endTime.getTime())
         return false;
       if (segment.userMessages === 0 && segment.handlerMessages === 0)
-        return false;
-      if (
-        segment.handler === "Bot" &&
-        segment.handlerMessages === 1 &&
-        segment.userMessages === 0 &&
-        segments.some(
-          (s) =>
-            s.handler === "Agent" &&
-            s.startTime.getTime() === segment.endTime.getTime()
-        )
-      )
         return false;
       return true;
     });
 
     return segments.map((segment) => ({
-      "Chat Start Time": toISTString(segment.startTime),
-      "Chat End Time": toISTString(segment.endTime),
+      "Chat Start Time": segment.startTime
+        ? toISTString(segment.startTime)
+        : "N/A",
+      "Chat End Time": segment.endTime ? toISTString(segment.endTime) : "N/A",
       Channel: channel,
       UserId: userIdsMap.get(convo.endUserId) || "N/A",
       Tag: convo.ChatTags?.map((tag) => tag.name).join(", ") || "N/A",
       ChatLink: `https://app.bot9.ai/inbox/${convo.id}?status=bot&search=`,
       CSAT: feedback?.value?.toString() || "N/A",
       "Feedback for":
-        feedback?.createdAt >= segment.startTime.getTime() &&
-        feedback?.createdAt <= segment.endTime.getTime()
+        feedback?.createdAt &&
+        segment.startTime &&
+        segment.endTime &&
+        feedback.createdAt >= segment.startTime.getTime() &&
+        feedback.createdAt <= segment.endTime.getTime()
           ? segment.handler
           : "N/A",
       City: city,
@@ -600,13 +615,16 @@ function processAgentData(rawData: any) {
       "Agent Name":
         segment.handler === "Bot"
           ? "Bot9"
-          : agentNamesMap.get(convo.AgentId) || "N/A",
+          : segment.agentName || agentNamesMap.get(convo.AgentId) || "N/A",
       "Queue Time": segment.queueTime
         ? formatTime(Math.round(segment.queueTime / 1000))
         : "N/A",
-      "Handling Time / Resolution Time": formatTime(
-        (segment.endTime.getTime() - segment.startTime.getTime()) / 1000
-      ),
+      "Handling Time / Resolution Time":
+        segment.startTime && segment.endTime
+          ? formatTime(
+              (segment.endTime.getTime() - segment.startTime.getTime()) / 1000
+            )
+          : "N/A",
       "First Response Time": segment.firstResponseTime
         ? formatTime(segment.firstResponseTime)
         : "N/A",
@@ -625,7 +643,7 @@ app.get("/", async (c) => {
   return c.json({ msg: "Rento analytics server is live" });
 });
 
-app.post("/:bot9ID/csat/rentomojo", async (c) => {
+app.post("/:bot9ID/csat", async (c) => {
   try {
     const { bot9ID } = c.req.param();
     const { startDate, startTime, endDate, endTime } = c.req.query();
@@ -707,7 +725,7 @@ app.post("/:bot9ID/csat/rentomojo", async (c) => {
   }
 });
 
-app.post("/:bot9ID/agent-dump/rentomojo", async (c) => {
+app.post("/:bot9ID/agent-dump", async (c) => {
   try {
     const { bot9ID } = c.req.param();
     const { startDate, startTime, endDate, endTime } = c.req.query();
