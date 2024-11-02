@@ -643,6 +643,51 @@ app.get("/", async (c) => {
   return c.json({ msg: "Rento analytics server is live" });
 });
 
+async function sendErrorEmail(
+  email: string,
+  errorDetails: string,
+  requestType: "CSAT" | "Agent Metrics",
+  requestParams: {
+    bot9ID: string;
+    startDate: string;
+    startTime: string;
+    endDate: string;
+    endTime: string;
+  }
+) {
+  try {
+    const emailResponse = await fetch("https://api.postmarkapp.com/email", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Postmark-Server-Token": POSTMARK_TOKEN,
+      },
+      body: JSON.stringify({
+        From: "no-reply@bot9.ai",
+        To: email,
+        Cc: "biswarup.sen@rankz.io",
+        Subject: `BOT9 - ${requestType} Export Failed`,
+        TextBody:
+          `Hello,\n\n` +
+          `We encountered an error while processing your ${requestType} data export request.\n\n` +
+          `Request Details:\n` +
+          `- Bot ID: ${requestParams.bot9ID}\n` +
+          `- Date Range: ${requestParams.startDate} ${requestParams.startTime} to ${requestParams.endDate} ${requestParams.endTime}\n\n` +
+          `Error Details:\n${errorDetails}\n\n` +
+          `Please try again or contact support if the issue persists.\n\n` +
+          `Best regards,\nBOT9 Team`,
+      }),
+    });
+
+    if (!emailResponse.ok) {
+      console.error("Failed to send error notification email");
+    }
+  } catch (error) {
+    console.error("Error sending error notification:", error);
+  }
+}
+
 app.post("/:bot9ID/csat", async (c) => {
   try {
     const { bot9ID } = c.req.param();
@@ -660,64 +705,86 @@ app.post("/:bot9ID/csat", async (c) => {
     const startDateTime = new Date(`${startDate}T${startTime}Z`);
     const endDateTime = new Date(`${endDate}T${endTime}Z`);
 
-    const rawData = await fetchRawChatData(bot9ID, startDateTime, endDateTime);
-    const processedData = processChatData(rawData);
+    // Fire and forget - using your existing processing logic
+    Promise.resolve().then(async () => {
+      try {
+        console.log("Starting CSAT data processing...");
+        const rawData = await fetchRawChatData(
+          bot9ID,
+          startDateTime,
+          endDateTime
+        );
+        const processedData = processChatData(rawData);
 
-    const csatColumns = [
-      "Chat Start Time",
-      "Chat End Time",
-      "UserId",
-      "Tag",
-      "ChatLink",
-      "CSAT",
-      "Handled by",
-      "Source",
-    ];
+        const csatColumns = [
+          "Chat Start Time",
+          "Chat End Time",
+          "UserId",
+          "Tag",
+          "ChatLink",
+          "CSAT",
+          "Handled by",
+          "Source",
+        ];
 
-    const csvData = await csvStringify(processedData, {
-      columns: csatColumns,
-      headers: true,
-    });
+        const csvData = await csvStringify(processedData, {
+          columns: csatColumns,
+          headers: true,
+        });
 
-    const csvBase64 = base64Encode(csvData);
-    const filename = `csat_data_${bot9ID}_${startDate}_${endDate}.csv`;
+        const csvBase64 = base64Encode(csvData);
+        const filename = `csat_data_${bot9ID}_${startDate}_${endDate}.csv`;
 
-    const emailResponse = await fetch("https://api.postmarkapp.com/email", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "X-Postmark-Server-Token": POSTMARK_TOKEN,
-      },
-      body: JSON.stringify({
-        From: "no-reply@bot9.ai",
-        To: email,
-        Cc: "biswarup.sen@rankz.io",
-        Subject: "BOT9 - CSAT Data Export",
-        TextBody: `Hello,\n\nPlease find attached your CSAT data for your bot from ${startDate} ${startTime} to ${endDate} ${endTime}.`,
-        Attachments: [
-          {
-            Name: filename,
-            Content: csvBase64,
-            ContentType: "text/csv",
+        const emailResponse = await fetch("https://api.postmarkapp.com/email", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-Postmark-Server-Token": POSTMARK_TOKEN,
           },
-        ],
-      }),
-    });
+          body: JSON.stringify({
+            From: "no-reply@bot9.ai",
+            To: email,
+            Cc: "biswarup.sen@rankz.io",
+            Subject: "BOT9 - CSAT Data Export",
+            TextBody: `Hello,\n\nPlease find attached your CSAT data for your bot from ${startDate} ${startTime} to ${endDate} ${endTime}.`,
+            Attachments: [
+              {
+                Name: filename,
+                Content: csvBase64,
+                ContentType: "text/csv",
+              },
+            ],
+          }),
+        });
 
-    if (!emailResponse.ok) {
-      throw new Error("Failed to send email");
-    }
+        if (!emailResponse.ok) {
+          throw new Error("Failed to send email");
+        }
+        console.log("CSAT data processing completed successfully");
+      } catch (error) {
+        console.error("Error in background CSAT processing:", error);
+
+        // Send error notification email
+        await sendErrorEmail(
+          email,
+          error.message || "Unknown error occurred during processing",
+          "CSAT",
+          { bot9ID, startDate, startTime, endDate, endTime }
+        );
+      }
+    });
 
     return c.json({
-      message: "CSAT data has been sent to your email",
+      message:
+        "Your request is being processed. You will receive the CSAT data in your email shortly.",
       success: true,
     });
   } catch (error) {
-    console.error("Error processing request:", error);
+    console.error("Error initiating request:", error);
     return c.json(
       {
-        error: "Failed to process request",
+        error: "Failed to initiate request",
         details: error.message,
       },
       500
@@ -742,74 +809,96 @@ app.post("/:bot9ID/agent-dump", async (c) => {
     const startDateTime = new Date(`${startDate}T${startTime}Z`);
     const endDateTime = new Date(`${endDate}T${endTime}Z`);
 
-    const rawData = await fetchRawAgentData(bot9ID, startDateTime, endDateTime);
-    const processedData = processAgentData(rawData);
+    // Fire and forget - using your existing processing logic
+    Promise.resolve().then(async () => {
+      try {
+        console.log("Starting agent metrics processing...");
+        const rawData = await fetchRawAgentData(
+          bot9ID,
+          startDateTime,
+          endDateTime
+        );
+        const processedData = processAgentData(rawData);
 
-    const agentColumns = [
-      "Chat Start Time",
-      "Chat End Time",
-      "Channel",
-      "UserId",
-      "Tag",
-      "ChatLink",
-      "CSAT",
-      "Feedback for",
-      "City",
-      "Handled by",
-      "Agent Name",
-      "Queue Time",
-      "Handling Time / Resolution Time",
-      "First Response Time",
-      "Average Response time",
-      "Messages sent by user",
-      "Messages sent by handler",
-      "Notes",
-    ];
+        const agentColumns = [
+          "Chat Start Time",
+          "Chat End Time",
+          "Channel",
+          "UserId",
+          "Tag",
+          "ChatLink",
+          "CSAT",
+          "Feedback for",
+          "City",
+          "Handled by",
+          "Agent Name",
+          "Queue Time",
+          "Handling Time / Resolution Time",
+          "First Response Time",
+          "Average Response time",
+          "Messages sent by user",
+          "Messages sent by handler",
+          "Notes",
+        ];
 
-    const csvData = await csvStringify(processedData, {
-      columns: agentColumns,
-      headers: true,
-    });
+        const csvData = await csvStringify(processedData, {
+          columns: agentColumns,
+          headers: true,
+        });
 
-    const csvBase64 = base64Encode(csvData);
-    const filename = `agent_metrics_${bot9ID}_${startDate}_${endDate}.csv`;
+        const csvBase64 = base64Encode(csvData);
+        const filename = `agent_metrics_${bot9ID}_${startDate}_${endDate}.csv`;
 
-    const emailResponse = await fetch("https://api.postmarkapp.com/email", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "X-Postmark-Server-Token": POSTMARK_TOKEN,
-      },
-      body: JSON.stringify({
-        From: "no-reply@bot9.ai",
-        To: email,
-        Cc: "biswarup.sen@rankz.io",
-        Subject: "BOT9 - Agent Metrics Data Export",
-        TextBody: `Hello,\n\nPlease find attached your Agent Metrics data for your bot from ${startDate} ${startTime} to ${endDate} ${endTime}.`,
-        Attachments: [
-          {
-            Name: filename,
-            Content: csvBase64,
-            ContentType: "text/csv",
+        const emailResponse = await fetch("https://api.postmarkapp.com/email", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-Postmark-Server-Token": POSTMARK_TOKEN,
           },
-        ],
-      }),
-    });
+          body: JSON.stringify({
+            From: "no-reply@bot9.ai",
+            To: email,
+            Cc: "biswarup.sen@rankz.io",
+            Subject: "BOT9 - Agent Metrics Data Export",
+            TextBody: `Hello,\n\nPlease find attached your Agent Metrics data for your bot from ${startDate} ${startTime} to ${endDate} ${endTime}.`,
+            Attachments: [
+              {
+                Name: filename,
+                Content: csvBase64,
+                ContentType: "text/csv",
+              },
+            ],
+          }),
+        });
 
-    if (!emailResponse.ok) {
-      throw new Error("Failed to send email");
-    }
+        if (!emailResponse.ok) {
+          throw new Error("Failed to send email");
+        }
+        console.log("Agent metrics processing completed successfully");
+      } catch (error) {
+        console.error("Error in background agent metrics processing:", error);
+
+        // Send error notification email
+        await sendErrorEmail(
+          email,
+          error.message || "Unknown error occurred during processing",
+          "Agent Metrics",
+          { bot9ID, startDate, startTime, endDate, endTime }
+        );
+      }
+    });
 
     return c.json({
-      message: "Agent metrics data has been sent to your email",
+      message:
+        "Your request is being processed. You will receive the Agent Metrics data in your email shortly.",
       success: true,
     });
   } catch (error) {
-    console.error("Error processing request:", error);
+    console.error("Error initiating request:", error);
     return c.json(
       {
-        error: "Failed to process request",
+        error: "Failed to initiate request",
         details: error.message,
       },
       500
