@@ -699,6 +699,164 @@ async function sendErrorEmail(
   }
 }
 
+function splitDateRange(startDate: Date, endDate: Date, chunkDays: number = 2) {
+  const chunks: { start: Date; end: Date }[] = [];
+  let currentStart = new Date(startDate);
+
+  while (currentStart < endDate) {
+    let currentEnd = new Date(currentStart);
+    currentEnd.setDate(currentEnd.getDate() + chunkDays);
+
+    // If chunk would exceed endDate, use endDate instead
+    if (currentEnd > endDate) {
+      currentEnd = new Date(endDate);
+    }
+
+    chunks.push({
+      start: new Date(currentStart),
+      end: new Date(currentEnd),
+    });
+
+    // Move to next chunk
+    currentStart = new Date(currentEnd);
+  }
+
+  return chunks;
+}
+
+async function processDataInChunks(params: {
+  bot9ID: string;
+  email: string;
+  startDateTime: Date;
+  endDateTime: Date;
+  fetchData: (bot9ID: string, start: Date, end: Date) => Promise<any>;
+  processData: (rawData: any) => any[];
+  columns: string[];
+  reportType: "CSAT" | "Agent Metrics";
+}) {
+  const {
+    bot9ID,
+    email,
+    startDateTime,
+    endDateTime,
+    fetchData,
+    processData,
+    columns,
+    reportType,
+  } = params;
+
+  console.log(`Starting ${reportType} data processing for date range:`, {
+    startDateTime,
+    endDateTime,
+    bot9ID,
+  });
+
+  const dateChunks = splitDateRange(startDateTime, endDateTime);
+  console.log(`Split processing into ${dateChunks.length} chunks`);
+
+  let totalRecordsProcessed = 0;
+  let currentChunk = 1;
+
+  for (const chunk of dateChunks) {
+    console.log(`Processing chunk ${currentChunk}/${dateChunks.length}:`, {
+      start: chunk.start,
+      end: chunk.end,
+    });
+
+    try {
+      const rawData = await fetchData(bot9ID, chunk.start, chunk.end);
+      console.log(`Fetched raw data for chunk ${currentChunk}. Processing...`);
+
+      const processedChunkData = processData(rawData);
+      console.log(
+        `Completed processing chunk ${currentChunk}. Records processed:`,
+        processedChunkData.length
+      );
+
+      // Format dates for email subject and body
+      const startFormatted = chunk.start.toLocaleString("en-US", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+      const endFormatted = chunk.end.toLocaleString("en-US", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+
+      // Generate and send email for this chunk
+      const csvData = await csvStringify(processedChunkData, {
+        columns: columns,
+        headers: true,
+      });
+
+      const csvBase64 = base64Encode(csvData);
+      const filename = `${reportType.toLowerCase()}_data_${bot9ID}_${
+        chunk.start.toISOString().split("T")[0]
+      }_${chunk.end.toISOString().split("T")[0]}.csv`;
+
+      console.log(`Sending email for chunk ${currentChunk}...`);
+
+      const emailResponse = await fetch("https://api.postmarkapp.com/email", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Postmark-Server-Token": POSTMARK_TOKEN,
+        },
+        body: JSON.stringify({
+          From: "no-reply@bot9.ai",
+          To: email,
+          Cc: "biswarup.sen@rankz.io",
+          Subject: `BOT9 - ${reportType} Data Export (${startFormatted} to ${endFormatted})`,
+          TextBody:
+            `Hello,\n\n` +
+            `Please find attached your ${reportType} data export for the period:\n` +
+            `From: ${startFormatted}\n` +
+            `To: ${endFormatted}\n\n` +
+            `Records in this file: ${processedChunkData.length}\n` +
+            `Part ${currentChunk} of ${dateChunks.length}\n\n` +
+            `Note: Due to the date range of your request, the data is being sent in ${dateChunks.length} separate parts.`,
+          Attachments: [
+            {
+              Name: filename,
+              Content: csvBase64,
+              ContentType: "text/csv",
+            },
+          ],
+        }),
+      });
+
+      if (!emailResponse.ok) {
+        throw new Error(`Failed to send email for chunk ${currentChunk}`);
+      }
+
+      console.log(`Successfully sent email for chunk ${currentChunk}`);
+      totalRecordsProcessed += processedChunkData.length;
+      currentChunk++;
+
+      // Clear processed data
+      processedChunkData.length = 0;
+    } catch (error) {
+      console.error(`Error processing chunk ${currentChunk}:`, error);
+      throw error;
+    }
+  }
+
+  console.log(
+    `All chunks processed. Total records processed:`,
+    totalRecordsProcessed
+  );
+  return totalRecordsProcessed;
+}
+
 app.post("/:bot9ID/csat", async (c) => {
   try {
     const { bot9ID } = c.req.param();
@@ -716,17 +874,9 @@ app.post("/:bot9ID/csat", async (c) => {
     const startDateTime = new Date(`${startDate}T${startTime}Z`);
     const endDateTime = new Date(`${endDate}T${endTime}Z`);
 
-    // Fire and forget - using your existing processing logic
+    // Fire and forget
     Promise.resolve().then(async () => {
       try {
-        console.log("Starting CSAT data processing...");
-        const rawData = await fetchRawChatData(
-          bot9ID,
-          startDateTime,
-          endDateTime
-        );
-        const processedData = processChatData(rawData);
-
         const csatColumns = [
           "Chat Start Time",
           "Chat End Time",
@@ -738,45 +888,18 @@ app.post("/:bot9ID/csat", async (c) => {
           "Source",
         ];
 
-        const csvData = await csvStringify(processedData, {
+        await processDataInChunks({
+          bot9ID,
+          email,
+          startDateTime,
+          endDateTime,
+          fetchData: fetchRawChatData,
+          processData: processChatData,
           columns: csatColumns,
-          headers: true,
+          reportType: "CSAT",
         });
-
-        const csvBase64 = base64Encode(csvData);
-        const filename = `csat_data_${bot9ID}_${startDate}_${endDate}.csv`;
-
-        const emailResponse = await fetch("https://api.postmarkapp.com/email", {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            "X-Postmark-Server-Token": POSTMARK_TOKEN,
-          },
-          body: JSON.stringify({
-            From: "no-reply@bot9.ai",
-            To: email,
-            Cc: "biswarup.sen@rankz.io",
-            Subject: "BOT9 - CSAT Data Export",
-            TextBody: `Hello,\n\nPlease find attached your CSAT data for your bot from ${startDate} ${startTime} to ${endDate} ${endTime}.`,
-            Attachments: [
-              {
-                Name: filename,
-                Content: csvBase64,
-                ContentType: "text/csv",
-              },
-            ],
-          }),
-        });
-
-        if (!emailResponse.ok) {
-          throw new Error("Failed to send email");
-        }
-        console.log("CSAT data processing completed successfully");
       } catch (error) {
         console.error("Error in background CSAT processing:", error);
-
-        // Send error notification email
         await sendErrorEmail(
           email,
           error.message || "Unknown error occurred during processing",
@@ -820,17 +943,9 @@ app.post("/:bot9ID/agent-dump", async (c) => {
     const startDateTime = new Date(`${startDate}T${startTime}Z`);
     const endDateTime = new Date(`${endDate}T${endTime}Z`);
 
-    // Fire and forget - using your existing processing logic
+    // Fire and forget
     Promise.resolve().then(async () => {
       try {
-        console.log("Starting agent metrics processing...");
-        const rawData = await fetchRawAgentData(
-          bot9ID,
-          startDateTime,
-          endDateTime
-        );
-        const processedData = processAgentData(rawData);
-
         const agentColumns = [
           "Chat Start Time",
           "Chat End Time",
@@ -852,45 +967,18 @@ app.post("/:bot9ID/agent-dump", async (c) => {
           "Notes",
         ];
 
-        const csvData = await csvStringify(processedData, {
+        await processDataInChunks({
+          bot9ID,
+          email,
+          startDateTime,
+          endDateTime,
+          fetchData: fetchRawAgentData,
+          processData: processAgentData,
           columns: agentColumns,
-          headers: true,
+          reportType: "Agent Metrics",
         });
-
-        const csvBase64 = base64Encode(csvData);
-        const filename = `agent_metrics_${bot9ID}_${startDate}_${endDate}.csv`;
-
-        const emailResponse = await fetch("https://api.postmarkapp.com/email", {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            "X-Postmark-Server-Token": POSTMARK_TOKEN,
-          },
-          body: JSON.stringify({
-            From: "no-reply@bot9.ai",
-            To: email,
-            Cc: "biswarup.sen@rankz.io",
-            Subject: "BOT9 - Agent Metrics Data Export",
-            TextBody: `Hello,\n\nPlease find attached your Agent Metrics data for your bot from ${startDate} ${startTime} to ${endDate} ${endTime}.`,
-            Attachments: [
-              {
-                Name: filename,
-                Content: csvBase64,
-                ContentType: "text/csv",
-              },
-            ],
-          }),
-        });
-
-        if (!emailResponse.ok) {
-          throw new Error("Failed to send email");
-        }
-        console.log("Agent metrics processing completed successfully");
       } catch (error) {
         console.error("Error in background agent metrics processing:", error);
-
-        // Send error notification email
         await sendErrorEmail(
           email,
           error.message || "Unknown error occurred during processing",
