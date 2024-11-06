@@ -17,7 +17,7 @@ app.use(
 
 const POSTMARK_TOKEN = "66fafdf6-510f-4993-b2c2-f684c344bf39";
 const POSTGRES_URL =
-  "postgresql://bot9:4vj9s0ef5xz958n4@139.84.208.184:5432/bot9";
+  "postgresql://bot9:4vj9s0ef5xz958n4@139.84.154.202:5432/bot9";
 
 const pool = new postgres.Pool(POSTGRES_URL, 3, true);
 
@@ -75,7 +75,6 @@ async function fetchRawChatData(
   const client = await getConnection();
 
   try {
-    // Fetch conversations
     const conversationsResult = await client.queryObject`
       SELECT 
         c.id,
@@ -100,41 +99,38 @@ async function fetchRawChatData(
     const conversationIds = conversationsResult.rows.map((c) => c.id);
     const endUserIds = conversationsResult.rows.map((c) => c.endUserId);
 
-    // Fetch all related data in parallel
     const [messagesResult, reviewsResult, tagsResult, userTagsResult] =
       await Promise.all([
-        // Messages
         client.queryObject`
-        SELECT 
-          "ConversationId",
-          meta,
-          "createdAt"
-        FROM "Messages"
-        WHERE "ConversationId" = ANY(${conversationIds})
-        ORDER BY "createdAt" ASC
-      `,
-        // Reviews
+          SELECT 
+            "ConversationId",
+            meta,
+            "createdAt"
+          FROM "Messages"
+          WHERE "ConversationId" = ANY(${conversationIds})
+          ORDER BY "createdAt" ASC
+        `,
         client.queryObject`
-        SELECT "entityId", value
-        FROM "Reviews"
-        WHERE "entityId" = ANY(${conversationIds})
-      `,
-        // Chat tags
+          SELECT "entityId", value
+          FROM "Reviews"
+          WHERE "entityId" = ANY(${conversationIds})
+        `,
         client.queryObject`
-        SELECT 
-          ct.name,
-          cct."conversationId" as "ConversationId"
-        FROM "ChatTags" ct
-        JOIN "ConversationChatTags" cct ON ct.id = cct."chatTagId"
-        WHERE cct."conversationId" = ANY(${conversationIds})
-      `,
-        // User tag attributes
+          SELECT 
+            ct.name,
+            cct."conversationId" as "ConversationId"
+          FROM "ChatTags" ct
+          JOIN "ConversationChatTags" cct ON ct.id = cct."chatTagId"
+          WHERE cct."conversationId" = ANY(${conversationIds})
+        `,
         client.queryObject`
-        SELECT "entityId", value
-        FROM "TagAttributes"
-        WHERE "entityId" = ANY(${endUserIds})
-      `,
+          SELECT "entityId", value
+          FROM "TagAttributes"
+          WHERE "entityId" = ANY(${endUserIds})
+          AND "tagId" = '0f788ec5-2041-4e26-b44e-f04cf4d06bf6'
+        `,
       ]);
+
     return {
       conversations: conversationsResult.rows,
       messages: messagesResult.rows,
@@ -281,7 +277,6 @@ function processChatData(rawData: any) {
     return [];
   }
 
-  // Create lookups
   const csatScores = new Map(
     (reviews || []).map((review: any) => [
       review.entityId,
@@ -306,7 +301,6 @@ function processChatData(rawData: any) {
     ])
   );
 
-  // Track conversation statuses
   const conversationStatus = new Map();
   (messages || []).forEach((message: any) => {
     if (message.meta?.functionCall) {
@@ -339,7 +333,6 @@ function processChatData(rawData: any) {
     }
   });
 
-  // Get latest message times
   const latestMessageTimes = new Map();
   (messages || []).forEach((message: any) => {
     const convoId = message.ConversationId;
@@ -352,13 +345,16 @@ function processChatData(rawData: any) {
     }
   });
 
-  // Process conversations
   return conversations.map((convo: any) => ({
     "Chat Start Time": toISTString(new Date(convo.createdAt)),
     "Chat End Time": toISTString(
       new Date(latestMessageTimes.get(convo.id) || convo.createdAt)
     ),
-    UserId: (userIdsMap.get(convo.endUserId) || "N/A").toString(),
+    UserId: (
+      userIdsMap.get(convo.endUserId) ||
+      convo.endUserId ||
+      "N/A"
+    ).toString(),
     Tag: conversationTagsMap.has(convo.id)
       ? conversationTagsMap.get(convo.id).join(", ")
       : "N/A",
@@ -871,10 +867,13 @@ app.post("/:bot9ID/csat", async (c) => {
       return c.json({ error: "Missing required parameters" }, 400);
     }
 
-    const startDateTime = new Date(`${startDate}T${startTime}Z`);
-    const endDateTime = new Date(`${endDate}T${endTime}Z`);
+    // Create start date in IST
+    const startDateTime = new Date(`${startDate}T${startTime}+05:30`);
 
-    // Fire and forget
+    // Create end date in IST and add one minute to include the entire minute
+    const endDateTime = new Date(`${endDate}T${endTime}+05:30`);
+    endDateTime.setSeconds(endDateTime.getSeconds() + 60);
+
     Promise.resolve().then(async () => {
       try {
         const csatColumns = [
@@ -926,6 +925,7 @@ app.post("/:bot9ID/csat", async (c) => {
   }
 });
 
+// Similar changes for agent-dump endpoint
 app.post("/:bot9ID/agent-dump", async (c) => {
   try {
     const { bot9ID } = c.req.param();
@@ -940,10 +940,13 @@ app.post("/:bot9ID/agent-dump", async (c) => {
       return c.json({ error: "Missing required parameters" }, 400);
     }
 
-    const startDateTime = new Date(`${startDate}T${startTime}Z`);
-    const endDateTime = new Date(`${endDate}T${endTime}Z`);
+    // Create start date in IST
+    const startDateTime = new Date(`${startDate}T${startTime}+05:30`);
 
-    // Fire and forget
+    // Create end date in IST and add one minute to include the entire minute
+    const endDateTime = new Date(`${endDate}T${endTime}+05:30`);
+    endDateTime.setSeconds(endDateTime.getSeconds() + 60);
+
     Promise.resolve().then(async () => {
       try {
         const agentColumns = [
