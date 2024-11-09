@@ -154,7 +154,6 @@ async function fetchRawAgentData(
   const client = await getConnection();
 
   try {
-    // Fetch conversations with ChatTags and AgentIds
     const conversationsResult = await client.queryObject<Conversation>`
       SELECT 
         c.id, 
@@ -229,7 +228,6 @@ async function fetchRawAgentData(
       `,
     ]);
 
-    // Get agent names if available
     const agentEmails = usersResult.rows.map((u) => u.email);
     const invitationsResult =
       agentEmails.length > 0
@@ -382,14 +380,12 @@ function toISTString(date: Date): string {
 function formatTime(seconds: number): string {
   if (seconds === null || seconds === undefined || isNaN(seconds)) return "N/A";
 
-  // Round the seconds to remove fractional parts
   seconds = Math.round(seconds);
 
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const remainingSeconds = Math.floor(seconds % 60);
 
-  // If time is less than a second, return "00:00:01" instead of "00:00:00"
   if (seconds === 0) {
     return "00:00:01";
   }
@@ -419,7 +415,6 @@ function processAgentData(rawData: any) {
     messagesByConversation.get(message.ConversationId).push(message);
   });
 
-  // Create lookup maps
   const csatScores = new Map(
     reviews.map((review) => [
       review.entityId,
@@ -455,7 +450,6 @@ function processAgentData(rawData: any) {
     const channel = convo.Source || "N/A";
     const convoMessages = messagesByConversation.get(convo.id) || [];
 
-    // Sort messages by timestamp
     convoMessages.sort((a, b) => {
       const timeA = new Date(a.createdAt).getTime();
       const timeB = new Date(b.createdAt).getTime();
@@ -481,19 +475,16 @@ function processAgentData(rawData: any) {
           if (chatText.message === "An Agent will be Assigned Soon") {
             queueStartTime = createdAt;
           } else if (chatText.message?.includes("has joined the chat")) {
-            // Extract agent name from the message
             const agentName = chatText.message.replace(
               " has joined the chat",
               ""
             );
 
-            // Close previous segment if exists
             if (currentSegment) {
               currentSegment.endTime = createdAt;
               segments.push(currentSegment);
             }
 
-            // Start new segment for the new agent
             currentHandler = "Agent";
             currentAgentName = agentName;
             currentSegment = {
@@ -589,7 +580,6 @@ function processAgentData(rawData: any) {
       segments.push(currentSegment);
     }
 
-    // Filter out invalid segments
     segments = segments.filter((segment) => {
       if (!segment.startTime || !segment.endTime) return false;
       if (segment.startTime.getTime() === segment.endTime.getTime())
@@ -703,7 +693,6 @@ function splitDateRange(startDate: Date, endDate: Date, chunkDays: number = 2) {
     let currentEnd = new Date(currentStart);
     currentEnd.setDate(currentEnd.getDate() + chunkDays);
 
-    // If chunk would exceed endDate, use endDate instead
     if (currentEnd > endDate) {
       currentEnd = new Date(endDate);
     }
@@ -713,7 +702,6 @@ function splitDateRange(startDate: Date, endDate: Date, chunkDays: number = 2) {
       end: new Date(currentEnd),
     });
 
-    // Move to next chunk
     currentStart = new Date(currentEnd);
   }
 
@@ -769,7 +757,6 @@ async function processDataInChunks(params: {
         processedChunkData.length
       );
 
-      // Format dates for email subject and body
       const startFormatted = chunk.start.toLocaleString("en-US", {
         day: "2-digit",
         month: "short",
@@ -787,7 +774,6 @@ async function processDataInChunks(params: {
         hour12: true,
       });
 
-      // Generate and send email for this chunk
       const csvData = await csvStringify(processedChunkData, {
         columns: columns,
         headers: true,
@@ -811,12 +797,10 @@ async function processDataInChunks(params: {
           From: "no-reply@bot9.ai",
           To: email,
           Cc: "biswarup.sen@rankz.io",
-          Subject: `BOT9 - ${reportType} Data Export (${startFormatted} to ${endFormatted})`,
+          Subject: `BOT9 - ${reportType} Data Export`,
           TextBody:
             `Hello,\n\n` +
-            `Please find attached your ${reportType} data export for the period:\n` +
-            `From: ${startFormatted}\n` +
-            `To: ${endFormatted}\n\n` +
+            `Please find attached your ${reportType} data export\n` +
             `Records in this file: ${processedChunkData.length}\n` +
             `Part ${currentChunk} of ${dateChunks.length}\n\n` +
             `Note: Due to the date range of your request, the data is being sent in ${dateChunks.length} separate parts.`,
@@ -838,7 +822,6 @@ async function processDataInChunks(params: {
       totalRecordsProcessed += processedChunkData.length;
       currentChunk++;
 
-      // Clear processed data
       processedChunkData.length = 0;
     } catch (error) {
       console.error(`Error processing chunk ${currentChunk}:`, error);
@@ -867,10 +850,8 @@ app.post("/:bot9ID/csat", async (c) => {
       return c.json({ error: "Missing required parameters" }, 400);
     }
 
-    // Create start date in IST
     const startDateTime = new Date(`${startDate}T${startTime}+05:30`);
 
-    // Create end date in IST and add one minute to include the entire minute
     const endDateTime = new Date(`${endDate}T${endTime}+05:30`);
     endDateTime.setSeconds(endDateTime.getSeconds() + 60);
 
@@ -925,7 +906,6 @@ app.post("/:bot9ID/csat", async (c) => {
   }
 });
 
-// Similar changes for agent-dump endpoint
 app.post("/:bot9ID/agent-dump", async (c) => {
   try {
     const { bot9ID } = c.req.param();
@@ -940,10 +920,8 @@ app.post("/:bot9ID/agent-dump", async (c) => {
       return c.json({ error: "Missing required parameters" }, 400);
     }
 
-    // Create start date in IST
     const startDateTime = new Date(`${startDate}T${startTime}+05:30`);
 
-    // Create end date in IST and add one minute to include the entire minute
     const endDateTime = new Date(`${endDate}T${endTime}+05:30`);
     endDateTime.setSeconds(endDateTime.getSeconds() + 60);
 
