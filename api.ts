@@ -757,22 +757,22 @@ async function processDataInChunks(params: {
         processedChunkData.length
       );
 
-      const startFormatted = chunk.start.toLocaleString("en-US", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-      });
-      const endFormatted = chunk.end.toLocaleString("en-US", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-      });
+      // const startFormatted = chunk.start.toLocaleString("en-US", {
+      //   day: "2-digit",
+      //   month: "short",
+      //   year: "numeric",
+      //   hour: "2-digit",
+      //   minute: "2-digit",
+      //   hour12: true,
+      // });
+      // const endFormatted = chunk.end.toLocaleString("en-US", {
+      //   day: "2-digit",
+      //   month: "short",
+      //   year: "numeric",
+      //   hour: "2-digit",
+      //   minute: "2-digit",
+      //   hour12: true,
+      // });
 
       const csvData = await csvStringify(processedChunkData, {
         columns: columns,
@@ -801,6 +801,8 @@ async function processDataInChunks(params: {
           TextBody:
             `Hello,\n\n` +
             `Please find attached your ${reportType} data export\n` +
+            // `From: ${startFormatted}\n` +
+            // `To: ${endFormatted}\n\n` +
             `Records in this file: ${processedChunkData.length}\n` +
             `Part ${currentChunk} of ${dateChunks.length}\n\n` +
             `Note: Due to the date range of your request, the data is being sent in ${dateChunks.length} separate parts.`,
