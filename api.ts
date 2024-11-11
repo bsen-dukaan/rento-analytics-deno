@@ -839,8 +839,8 @@ async function processDataInChunks(params: {
 
   try {
     const filename = `${reportType.toLowerCase()}_data_${bot9ID}_.csv`;
+    const dmsUploadURL = await uploadToDMS(combinedDataCsv, filename);
     console.log(`Sending email`);
-    const dmsUploadResp = await uploadToDMS(combinedDataCsv, filename);
 
     const emailResponse = await fetch("https://api.postmarkapp.com/email", {
       method: "POST",
@@ -856,42 +856,20 @@ async function processDataInChunks(params: {
         Subject: `BOT9 - ${reportType} Data Export`,
         HtmlBody: `
       <p>Hello,</p>
-      <p>Please click the link below to download your ${reportType} data export:</p>
-      <p>
-        <a href="${dmsUploadResp}" 
-           download="${filename}"
-           target="_blank"
-           rel="noopener noreferrer"
-           onclick="window.open(this.href); setTimeout(() => { const link = document.createElement('a'); link.href = this.href; link.download = '${filename}'; document.body.appendChild(link); link.click(); document.body.removeChild(link); }, 1000); return false;"
-           style="display: inline-block; 
-                  padding: 10px 20px; 
-                  background-color: #007bff; 
-                  color: white; 
-                  text-decoration: none; 
-                  border-radius: 5px;
-                  margin: 20px 0;">
-         Download ${filename} Data
+      <p>Please click the button below to open the file and download your ${reportType} data:</p>
+
+      <a href="${dmsUploadURL}" target="_blank" 
+         style="display: inline-block; 
+                padding: 10px 20px; 
+                background-color: #007bff; 
+                color: white; 
+                text-decoration: none; 
+                border-radius: 5px;
+                margin: 20px 0;">
+          Open and Download ${reportType} Data
       </a>
-      </p>
-      <p style="font-size: 12px; color: #666;">
-        If the download doesn't start automatically:
-        <ol style="margin-top: 5px;">
-          <li>Right-click on the button above</li>
-          <li>Select "Save Link As..." or "Download Linked File As..."</li>
-          <li>Choose your save location and click Save</li>
-        </ol>
-      </p>
-      
-      <!-- Fallback link -->
-      <p style="font-size: 12px; color: #666;">
-        Alternative download link:
-        <br>
-        <a href="${dmsUploadResp}" 
-           download="${filename}"
-           style="word-break: break-all;">
-           ${dmsUploadResp}
-        </a>
-      </p>
+
+      <p>If the file opens in a new tab, and you wish to download it, simply press <strong>Ctrl + S</strong> (Windows) or <strong>Cmd + S</strong> (Mac) to save it to your computer.</p>
     `,
       }),
     });
