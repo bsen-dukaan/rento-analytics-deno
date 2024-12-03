@@ -17,7 +17,7 @@ app.use(
 
 const POSTMARK_TOKEN = "66fafdf6-510f-4993-b2c2-f684c344bf39";
 const POSTGRES_URL =
-  "postgresql://bot9:4vj9s0ef5xz958n4@139.84.154.202:5432/bot9";
+  "postgresql://bot9:4vj9s0ef5xz958n4@107.189.169.218:5432/bot9";
 
 const pool = new postgres.Pool(POSTGRES_URL, 3, true);
 
@@ -708,6 +708,55 @@ function splitDateRange(startDate: Date, endDate: Date, chunkDays: number = 2) {
   return chunks;
 }
 
+const DMS_TOKEN =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJiYjMzM2Y2Ny1jODMwLTRiNzAtYjcxNi00YmQyZTQ4MWYxYjgiLCJlbWFpbCI6Im55bWlzaEByYW5rei5pbyIsInRlYW1JZCI6IjM1MzBjZDhlLWQxZjQtNDZmYi1iZjllLTFjOGIwMzUwOWU1MiIsInBlcm1pc3Npb25zIjpbeyJtb2R1bGUiOiJjaGF0IiwicGVybWlzc2lvbnMiOlsiYWNjZXNzX2luYm94IiwibWFuYWdlX2JvdCJdfSx7Im1vZHVsZSI6InZvaWNlIiwicGVybWlzc2lvbnMiOlsiYWNjZXNzX3ZvaWNlIiwibWFuYWdlX3ZvaWNlIl19LHsibW9kdWxlIjoiZGF0YSIsInBlcm1pc3Npb25zIjpbImFjY2Vzc19kYXRhIiwibWFuYWdlX2RhdGEiXX0seyJtb2R1bGUiOiJhZ2VudHMiLCJwZXJtaXNzaW9ucyI6WyJ1c2VfYWdlbnRzIiwibWFuYWdlX2FnZW50cyJdfV0sImlzQWRtaW4iOmZhbHNlLCJpYXQiOjE3MjgzOTQ0NTUsImV4cCI6MTc1OTkzMDQ1NX0.0v_-8OQEkKN42AQCOGHzzk09OJEBMy3Kz5YwXX0FTXY"; // Replace with actual token
+
+// Add this helper function to handle DMS upload
+import { encode as base64Encode } from "https://deno.land/std@0.177.0/encoding/base64.ts";
+import { TextLineStream } from "https://deno.land/std@0.177.0/streams/mod.ts";
+
+async function uploadToDMS(csvData: string, filename: string) {
+  try {
+    // Prepare FormData
+    const formData = new FormData();
+
+    // Convert csvData to a Blob
+    const encoder = new TextEncoder();
+    const uint8Array = encoder.encode(csvData);
+    const blob = new Blob([uint8Array], { type: "text/csv" });
+    formData.append("file", blob, filename);
+
+    // Send the request to DMS
+    const response = await fetch("https://dms.mydukaan.io/api/media/upload/", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${DMS_TOKEN}`,
+        Accept: "application/json, text/plain, */*",
+      },
+      body: formData,
+    });
+
+    // Check if upload succeeded
+    if (!response.ok) {
+      throw new Error(`DMS upload failed with status: ${response.status}`);
+    }
+
+    // Parse the JSON response
+    const data = await response.json();
+
+    // Log and return the URL
+    if (data && data.data && data.data.cdnURL) {
+      console.log("DMS Upload URL:", data.data.cdnURL);
+      return data.data.cdnURL;
+    } else {
+      throw new Error("DMS response did not contain a valid URL.");
+    }
+  } catch (error) {
+    console.error("Error uploading to DMS:", error);
+    throw error;
+  }
+}
+
 async function processDataInChunks(params: {
   bot9ID: string;
   email: string;
@@ -740,95 +789,98 @@ async function processDataInChunks(params: {
 
   let totalRecordsProcessed = 0;
   let currentChunk = 1;
-
+  let combinedDataCsv = "";
+  let headerContains = true;
   for (const chunk of dateChunks) {
     console.log(`Processing chunk ${currentChunk}/${dateChunks.length}:`, {
       start: chunk.start,
       end: chunk.end,
     });
 
-    try {
-      const rawData = await fetchData(bot9ID, chunk.start, chunk.end);
-      console.log(`Fetched raw data for chunk ${currentChunk}. Processing...`);
+    const rawData = await fetchData(bot9ID, chunk.start, chunk.end);
+    console.log(`Fetched raw data for chunk ${currentChunk}. Processing...`);
 
-      const processedChunkData = processData(rawData);
-      console.log(
-        `Completed processing chunk ${currentChunk}. Records processed:`,
-        processedChunkData.length
-      );
+    const processedChunkData = processData(rawData);
+    console.log(
+      `Completed processing chunk ${currentChunk}. Records processed:`,
+      processedChunkData.length
+    );
 
-      // const startFormatted = chunk.start.toLocaleString("en-US", {
-      //   day: "2-digit",
-      //   month: "short",
-      //   year: "numeric",
-      //   hour: "2-digit",
-      //   minute: "2-digit",
-      //   hour12: true,
-      // });
-      // const endFormatted = chunk.end.toLocaleString("en-US", {
-      //   day: "2-digit",
-      //   month: "short",
-      //   year: "numeric",
-      //   hour: "2-digit",
-      //   minute: "2-digit",
-      //   hour12: true,
-      // });
+    // const startFormatted = chunk.start.toLocaleString("en-US", {
+    //   day: "2-digit",
+    //   month: "short",
+    //   year: "numeric",
+    //   hour: "2-digit",
+    //   minute: "2-digit",
+    //   hour12: true,
+    // });
+    // const endFormatted = chunk.end.toLocaleString("en-US", {
+    //   day: "2-digit",
+    //   month: "short",
+    //   year: "numeric",
+    //   hour: "2-digit",
+    //   minute: "2-digit",
+    //   hour12: true,
+    // });
 
-      const csvData = await csvStringify(processedChunkData, {
-        columns: columns,
-        headers: true,
-      });
+    totalRecordsProcessed += processedChunkData.length;
+    currentChunk++;
 
-      const csvBase64 = base64Encode(csvData);
-      const filename = `${reportType.toLowerCase()}_data_${bot9ID}_${
-        chunk.start.toISOString().split("T")[0]
-      }_${chunk.end.toISOString().split("T")[0]}.csv`;
+    const csvData = await csvStringify(processedChunkData, {
+      columns: columns,
+      headers: headerContains,
+    });
 
-      console.log(`Sending email for chunk ${currentChunk}...`);
+    combinedDataCsv += csvData;
+    headerContains = false;
 
-      const emailResponse = await fetch("https://api.postmarkapp.com/email", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "X-Postmark-Server-Token": POSTMARK_TOKEN,
-        },
-        body: JSON.stringify({
-          From: "no-reply@bot9.ai",
-          To: email,
-          Cc: "biswarup.sen@rankz.io",
-          Subject: `BOT9 - ${reportType} Data Export`,
-          TextBody:
-            `Hello,\n\n` +
-            `Please find attached your ${reportType} data export\n` +
-            // `From: ${startFormatted}\n` +
-            // `To: ${endFormatted}\n\n` +
-            `Records in this file: ${processedChunkData.length}\n` +
-            `Part ${currentChunk} of ${dateChunks.length}\n\n` +
-            `Note: Due to the date range of your request, the data is being sent in ${dateChunks.length} separate parts.`,
-          Attachments: [
-            {
-              Name: filename,
-              Content: csvBase64,
-              ContentType: "text/csv",
-            },
-          ],
-        }),
-      });
+    processedChunkData.length = 0;
+  }
 
-      if (!emailResponse.ok) {
-        throw new Error(`Failed to send email for chunk ${currentChunk}`);
-      }
+  try {
+    const filename = `${reportType.toLowerCase()}_data_${bot9ID}_.csv`;
+    const dmsUploadURL = await uploadToDMS(combinedDataCsv, filename);
+    console.log(`Sending email`);
 
-      console.log(`Successfully sent email for chunk ${currentChunk}`);
-      totalRecordsProcessed += processedChunkData.length;
-      currentChunk++;
+    const emailResponse = await fetch("https://api.postmarkapp.com/email", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Postmark-Server-Token": POSTMARK_TOKEN,
+      },
+      body: JSON.stringify({
+        From: "no-reply@bot9.ai",
+        To: email,
+        Cc: "biswarup.sen@rankz.io",
+        Subject: `BOT9 - ${reportType} Data Export`,
+        HtmlBody: `
+      <p>Hello,</p>
+      <p>Please click the button below to open the file and download your ${reportType} data:</p>
 
-      processedChunkData.length = 0;
-    } catch (error) {
-      console.error(`Error processing chunk ${currentChunk}:`, error);
-      throw error;
+      <a href="${dmsUploadURL}" target="_blank" 
+         style="display: inline-block; 
+                padding: 10px 20px; 
+                background-color: #007bff; 
+                color: white; 
+                text-decoration: none; 
+                border-radius: 5px;
+                margin: 20px 0;">
+          Open and Download ${reportType} Data
+      </a>
+
+      <p>If the file opens in a new tab, and you wish to download it, simply press <strong>Ctrl + S</strong> (Windows) or <strong>Cmd + S</strong> (Mac) to save it to your computer.</p>
+    `,
+      }),
+    });
+
+    if (!emailResponse.ok) {
+      throw new Error(`Failed to send email`);
     }
+    console.log(`Successfully sent email`);
+  } catch (error) {
+    console.error(`Error processing:`, error);
+    throw error;
   }
 
   console.log(
